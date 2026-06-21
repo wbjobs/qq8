@@ -29,7 +29,11 @@ export class SceneManager {
         this.wallMeshes = [];
         this.panelMeshes = [];
         this.sourceMesh = null;
+        this.sourceArrow = null;
+        this.sourcePatternMesh = null;
         this.sourcePosition = [5, 4, 1.5];
+        this.sourcePattern = 'omnidirectional';
+        this.sourceForwardDir = [1, 0, 0];
         this.roomConfig = null;
 
         this.raycaster = new THREE.Raycaster();
@@ -131,12 +135,43 @@ export class SceneManager {
         this._createSource();
     }
 
-    _createSource() {
-        if (this.sourceMesh) {
-            this.scene.remove(this.sourceMesh);
-            this.sourceMesh.geometry.dispose();
-            this.sourceMesh.material.dispose();
+    _disposeObject(obj) {
+        if (!obj) return;
+        this.scene.remove(obj);
+        if (obj.traverse) {
+            obj.traverse(child => {
+                if (child.geometry && typeof child.geometry.dispose === 'function') {
+                    try { child.geometry.dispose(); } catch (e) {}
+                }
+                if (child.material) {
+                    if (Array.isArray(child.material)) {
+                        child.material.forEach(m => {
+                            if (typeof m.dispose === 'function') {
+                                try { m.dispose(); } catch (e) {}
+                            }
+                        });
+                    } else if (typeof child.material.dispose === 'function') {
+                        try { child.material.dispose(); } catch (e) {}
+                    }
+                }
+            });
+        } else {
+            if (obj.geometry && typeof obj.geometry.dispose === 'function') {
+                try { obj.geometry.dispose(); } catch (e) {}
+            }
+            if (obj.material && typeof obj.material.dispose === 'function') {
+                try { obj.material.dispose(); } catch (e) {}
+            }
         }
+    }
+
+    _createSource() {
+        this._disposeObject(this.sourceMesh);
+        this._disposeObject(this.sourceArrow);
+        this._disposeObject(this.sourcePatternMesh);
+        this.sourceMesh = null;
+        this.sourceArrow = null;
+        this.sourcePatternMesh = null;
 
         const geo = new THREE.SphereGeometry(0.2, 16, 16);
         const mat = new THREE.MeshPhongMaterial({
@@ -152,6 +187,87 @@ export class SceneManager {
         );
         this.sourceMesh.userData.type = 'source';
         this.scene.add(this.sourceMesh);
+
+        if (this.sourcePattern !== 'omnidirectional') {
+            const arrowDir = new THREE.Vector3(
+                this.sourceForwardDir[0],
+                this.sourceForwardDir[2],
+                this.sourceForwardDir[1]
+            ).normalize();
+            const arrowOrigin = new THREE.Vector3(
+                this.sourcePosition[0],
+                this.sourcePosition[2],
+                this.sourcePosition[1]
+            );
+            this.sourceArrow = new THREE.ArrowHelper(
+                arrowDir, arrowOrigin, 0.8, 0xffff00, 0.2, 0.1
+            );
+            this.sourceArrow.userData.type = 'sourceArrow';
+            this.scene.add(this.sourceArrow);
+
+            this._createPatternMesh();
+        }
+    }
+
+    _createPatternMesh() {
+        const group = new THREE.Group();
+        const color = 0xffff66;
+        const numPoints = 32;
+        const scale = 1.5;
+
+        if (this.sourcePattern === 'cardioid') {
+            for (let z = 0; z >= 0; z -= 1) {
+                const points = [];
+                for (let i = 0; i <= numPoints; i++) {
+                    const theta = (i / numPoints) * Math.PI * 2;
+                    const r = 0.5 * (1 + Math.cos(theta));
+                    points.push(new THREE.Vector3(
+                        r * Math.cos(theta) * scale,
+                        z * 0.3,
+                        r * Math.sin(theta) * scale
+                    ));
+                }
+                const geo = new THREE.BufferGeometry().setFromPoints(points);
+                const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.6 });
+                const line = new THREE.Line(geo, mat);
+                group.add(line);
+            }
+        } else if (this.sourcePattern === 'figure8') {
+            for (let z = 0; z >= 0; z -= 1) {
+                const points = [];
+                for (let i = 0; i <= numPoints; i++) {
+                    const theta = (i / numPoints) * Math.PI * 2;
+                    const r = Math.abs(Math.cos(theta));
+                    points.push(new THREE.Vector3(
+                        r * Math.cos(theta) * scale,
+                        z * 0.3,
+                        r * Math.sin(theta) * scale
+                    ));
+                }
+                const geo = new THREE.BufferGeometry().setFromPoints(points);
+                const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.6 });
+                const line = new THREE.Line(geo, mat);
+                group.add(line);
+            }
+        }
+
+        const fwd = new THREE.Vector3(
+            this.sourceForwardDir[0],
+            this.sourceForwardDir[2],
+            this.sourceForwardDir[1]
+        ).normalize();
+        const up = new THREE.Vector3(0, 1, 0);
+        const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1, 0, 0), fwd);
+        group.quaternion.copy(quat);
+
+        group.position.set(
+            this.sourcePosition[0],
+            this.sourcePosition[2],
+            this.sourcePosition[1]
+        );
+        group.userData.type = 'sourcePattern';
+        this.sourcePatternMesh = group;
+        this.scene.add(group);
     }
 
     addWall(start, end, height, material = 'concrete') {
@@ -304,6 +420,12 @@ export class SceneManager {
                 }
             }
         });
+    }
+
+    setSourcePattern(pattern, forwardDir) {
+        this.sourcePattern = pattern;
+        if (forwardDir) this.sourceForwardDir = forwardDir;
+        this._createSource();
     }
 
     update() {

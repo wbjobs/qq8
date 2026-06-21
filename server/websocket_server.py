@@ -31,6 +31,8 @@ class AcousticWebSocketServer:
         self.calculator = AcousticsCalculator(self.config)
         self.room = None
         self.source_position = None
+        self.source_pattern = 'omnidirectional'
+        self.source_forward_dir = [1, 0, 0]
         self._reset_room()
 
     def _reset_room(self):
@@ -42,6 +44,8 @@ class AcousticWebSocketServer:
             sc['default_wall_material']
         )
         self.source_position = [sc['room_width'] / 2, sc['room_depth'] / 2, 1.5]
+        self.source_pattern = 'omnidirectional'
+        self.source_forward_dir = [1, 0, 0]
 
     def _handle_message(self, message):
         try:
@@ -97,6 +101,15 @@ class AcousticWebSocketServer:
                 self.source_position = data['position']
                 return {'type': 'source_set', 'position': self.source_position}
 
+            elif msg_type == 'set_source_pattern':
+                self.source_pattern = data.get('pattern', 'omnidirectional')
+                self.source_forward_dir = data.get('forward_dir', [1, 0, 0])
+                return {
+                    'type': 'source_pattern_set',
+                    'pattern': self.source_pattern,
+                    'forward_dir': self.source_forward_dir
+                }
+
             elif msg_type == 'reset_scene':
                 self._reset_room()
                 return {'type': 'scene_reset'}
@@ -108,7 +121,9 @@ class AcousticWebSocketServer:
                 return {
                     'type': 'scene_data',
                     'room': self.room.to_dict(),
-                    'source': self.source_position
+                    'source': self.source_position,
+                    'source_pattern': self.source_pattern,
+                    'source_forward_dir': self.source_forward_dir
                 }
 
             else:
@@ -121,20 +136,27 @@ class AcousticWebSocketServer:
         import numpy as np
         import time
         start_time = time.time()
-        rays, adaptive_count = self.raytracer.trace_all(self.source_position, self.room)
+        rays, adaptive_count = self.raytracer.trace_all(
+            self.source_position, self.room,
+            pattern=self.source_pattern,
+            forward_dir=self.source_forward_dir
+        )
 
         ray_data = []
         for r in rays:
             if len(r['path']) < 2:
                 continue
+            energies = r.get('energy', r['energies'])
             ray_data.append({
                 'path': r['path'],
-                'energies': r['energies'],
+                'energies': energies,
                 'total_distance': round(r['total_distance'], 3)
             })
 
         rt60_map = self.raytracer.calculate_rt60_at_points(
-            self.source_position, self.room
+            self.source_position, self.room,
+            pattern=self.source_pattern,
+            forward_dir=self.source_forward_dir
         )
         heatmap = self.calculator.compute_heatmap({}, rt60_map)
 
@@ -161,7 +183,9 @@ class AcousticWebSocketServer:
             'total_absorption': round(total_abs, 3),
             'adaptive_ray_count': adaptive_count,
             'num_surfaces': num_surfaces,
-            'simulation_time': sim_time
+            'simulation_time': sim_time,
+            'source_pattern': self.source_pattern,
+            'source_forward_dir': self.source_forward_dir
         }
 
     async def _ws_handler(self, websocket):
@@ -187,8 +211,18 @@ class AcousticWebSocketServer:
 
         http_port = self.config['server']['http_port']
 
+        class NoCacheHandler(SimpleHTTPRequestHandler):
+            def end_headers(self):
+                self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
+                self.send_header('Pragma', 'no-cache')
+                self.send_header('Expires', '0')
+                super().end_headers()
+
+            def log_message(self, format, *args):
+                pass
+
         def start_http():
-            handler = SimpleHTTPRequestHandler
+            handler = NoCacheHandler
             httpd = HTTPServer((host, http_port), handler)
             print(f"HTTP server running on http://{host}:{http_port}")
             httpd.serve_forever()

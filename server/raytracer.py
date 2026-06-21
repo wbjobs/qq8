@@ -218,31 +218,93 @@ class RayTracer:
         else:
             return max(200, int(base_rays * 0.4))
 
-    def generate_ray_directions(self, count=None):
+    def _directivity_gain(self, direction, forward_dir, pattern='omnidirectional'):
+        if pattern == 'omnidirectional':
+            return 1.0
+        d = np.array(direction, dtype=np.float64)
+        f = np.array(forward_dir, dtype=np.float64)
+        d = d / np.linalg.norm(d)
+        f = f / np.linalg.norm(f)
+        cos_theta = np.dot(d, f)
+        if pattern == 'cardioid':
+            return 0.5 * (1.0 + cos_theta)
+        elif pattern == 'figure8':
+            return cos_theta ** 2
+        elif pattern == 'hypercardioid':
+            return 0.25 + 0.75 * cos_theta
+        else:
+            return 1.0
+
+    def generate_ray_directions(self, count=None, pattern='omnidirectional', forward_dir=None):
         if count is None:
             count = self.num_rays
-        directions = []
-        golden_ratio = (1 + np.sqrt(5)) / 2
-        for i in range(count):
-            theta = 2 * np.pi * i / golden_ratio
-            phi = np.arccos(1 - 2 * (i + 0.5) / count)
-            x = np.sin(phi) * np.cos(theta)
-            y = np.sin(phi) * np.sin(theta)
-            z = np.cos(phi)
-            directions.append([x, y, z])
-        return directions
+        if pattern == 'omnidirectional' or forward_dir is None:
+            directions = []
+            golden_ratio = (1 + np.sqrt(5)) / 2
+            for i in range(count):
+                theta = 2 * np.pi * i / golden_ratio
+                phi = np.arccos(1 - 2 * (i + 0.5) / count)
+                x = np.sin(phi) * np.cos(theta)
+                y = np.sin(phi) * np.sin(theta)
+                z = np.cos(phi)
+                directions.append([x, y, z])
+            return directions, np.ones(count)
 
-    def trace_all(self, source_position, room):
+        fwd = np.array(forward_dir, dtype=np.float64)
+        fwd = fwd / np.linalg.norm(fwd)
+
+        directions = []
+        weights = []
+        max_gain = 1.0
+
+        golden_ratio = (1 + np.sqrt(5)) / 2
+        over_sample = 4
+        candidate_count = count * over_sample
+
+        for i in range(candidate_count):
+            theta = 2 * np.pi * i / golden_ratio
+            phi = np.arccos(1 - 2 * (i + 0.5) / candidate_count)
+            d = np.array([
+                np.sin(phi) * np.cos(theta),
+                np.sin(phi) * np.sin(theta),
+                np.cos(phi)
+            ])
+            gain = self._directivity_gain(d, fwd, pattern)
+            if np.random.random() < gain / max_gain:
+                directions.append(d.tolist())
+                weights.append(gain)
+                if len(directions) >= count:
+                    break
+
+        if len(directions) < count:
+            extra = count - len(directions)
+            for i in range(extra):
+                theta = 2 * np.pi * np.random.random()
+                phi = np.arccos(1 - 2 * np.random.random())
+                d = np.array([
+                    np.sin(phi) * np.cos(theta),
+                    np.sin(phi) * np.sin(theta),
+                    np.cos(phi)
+                ])
+                gain = self._directivity_gain(d, fwd, pattern)
+                directions.append(d.tolist())
+                weights.append(gain)
+
+        return directions[:count], np.array(weights[:count])
+
+    def trace_all(self, source_position, room, pattern='omnidirectional', forward_dir=None):
         surfaces = room.get_all_surfaces()
         adaptive_count = self._get_adaptive_ray_count(len(surfaces))
-        directions = self.generate_ray_directions(adaptive_count)
+        directions, weights = self.generate_ray_directions(adaptive_count, pattern, forward_dir)
         rays = []
-        for d in directions:
+        for i, d in enumerate(directions):
             result = self.trace_ray(source_position, d, surfaces)
+            result['initial_weight'] = float(weights[i]) if weights is not None else 1.0
+            result['energy'] = [e * float(weights[i]) for e in result['energies']] if weights is not None else result['energies']
             rays.append(result)
         return rays, adaptive_count
 
-    def calculate_rt60_at_points(self, source_position, room, grid_resolution=None):
+    def calculate_rt60_at_points(self, source_position, room, grid_resolution=None, pattern='omnidirectional', forward_dir=None):
         if grid_resolution is None:
             grid_resolution = self.scene_config['grid_resolution']
 
@@ -269,7 +331,7 @@ class RayTracer:
         base_rt60 = self.calculator.calculate_rt60_sabine(room_volume, total_absorption)
 
         rt60_map = {}
-        rays, _ = self.trace_all(source_position, room)
+        rays, _ = self.trace_all(source_position, room, pattern, forward_dir)
 
         x_points = np.arange(grid_resolution / 2, w, grid_resolution)
         y_points = np.arange(grid_resolution / 2, d, grid_resolution)

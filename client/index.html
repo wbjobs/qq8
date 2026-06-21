@@ -169,6 +169,30 @@
             </div>
 
             <div class="panel">
+                <h3>🎯 声源指向性</h3>
+                <label>指向性模式</label>
+                <select id="source-pattern">
+                    <option value="omnidirectional">全向</option>
+                    <option value="cardioid">心形</option>
+                    <option value="figure8">八字形</option>
+                    <option value="hypercardioid">超心形</option>
+                </select>
+                <label>水平朝向（度）</label>
+                <input type="number" id="source-azimuth" value="0" min="-180" max="180" step="5">
+                <button class="btn btn-secondary" id="btn-set-pattern">应用指向性</button>
+            </div>
+
+            <div class="panel">
+                <h3>🚶 射线漫游</h3>
+                <p style="font-size: 11px; color: #7f8fa6; margin: 4px 0 8px 0;">
+                    点击场景中的射线路径，相机将沿该路径漫游，并实时播放混响音效。
+                </p>
+                <button class="btn btn-primary" id="btn-walk-mode" disabled>选择射线漫游</button>
+                <button class="btn btn-secondary" id="btn-stop-walk" disabled>停止漫游</button>
+                <div id="walk-status" style="font-size: 11px; color: #7f8fa6; margin-top: 6px;"></div>
+            </div>
+
+            <div class="panel">
                 <h3>🚀 模拟控制</h3>
                 <button class="btn btn-primary" id="btn-simulate">运行射线追踪模拟</button>
                 <button class="btn btn-secondary" id="btn-clear-viz">清除可视化</button>
@@ -215,6 +239,7 @@
     </script>
 
     <script type="module">
+        import * as THREE from 'three';
         import { SceneManager } from './scene.js';
         import { RayVisualizer } from './ray_visualizer.js';
 
@@ -223,6 +248,20 @@
         let sceneManager = null;
         let rayVisualizer = null;
         let config = null;
+        let lastRays = [];
+        let lastHeatmap = {};
+        let walkMode = false;
+        let selectedRayIndex = -1;
+        let walkPath = [];
+        let walkProgress = 0;
+        let walkSpeed = 1.5;
+        let isWalking = false;
+        let walkDirection = 1;
+        let audioCtx = null;
+        let noiseNode = null;
+        let convolverNode = null;
+        let gainNode = null;
+        let filterNode = null;
 
         async function loadConfig() {
             try {
@@ -285,6 +324,12 @@
             switch (data.type) {
                 case 'scene_data':
                     sceneManager.sourcePosition = data.source;
+                    if (data.source_pattern) {
+                        sceneManager.sourcePattern = data.source_pattern;
+                        sceneManager.sourceForwardDir = data.source_forward_dir || [1, 0, 0];
+                        sceneManager._createSource();
+                        updatePatternInputs(data.source_pattern, data.source_forward_dir);
+                    }
                     updateSourceInputs(data.source);
                     break;
 
@@ -318,6 +363,8 @@
                     break;
 
                 case 'simulation_result':
+                    lastRays = data.rays;
+                    lastHeatmap = data.heatmap;
                     rayVisualizer.visualizeRays(data.rays);
                     rayVisualizer.visualizeHeatmap(data.heatmap, config.scene.grid_resolution);
                     rayVisualizer.addRayLegend();
@@ -330,11 +377,17 @@
                     document.getElementById('sim-time').textContent = (data.simulation_time || 0).toFixed(2) + ' s';
                     document.getElementById('btn-simulate').disabled = false;
                     document.getElementById('btn-simulate').textContent = '运行射线追踪模拟';
+                    document.getElementById('btn-walk-mode').disabled = false;
                     break;
 
                 case 'source_set':
                     sceneManager.sourcePosition = data.position;
                     sceneManager._createSource();
+                    break;
+
+                case 'source_pattern_set':
+                    sceneManager.setSourcePattern(data.pattern, data.forward_dir);
+                    updatePatternInputs(data.pattern, data.forward_dir);
                     break;
 
                 case 'error':
@@ -355,6 +408,19 @@
             document.getElementById('source-x').value = pos[0];
             document.getElementById('source-y').value = pos[1];
             document.getElementById('source-z').value = pos[2];
+        }
+
+        function updatePatternInputs(pattern, forwardDir) {
+            document.getElementById('source-pattern').value = pattern;
+            if (forwardDir) {
+                const angle = Math.atan2(forwardDir[1], forwardDir[0]) * 180 / Math.PI;
+                document.getElementById('source-azimuth').value = Math.round(angle);
+            }
+        }
+
+        function getForwardDirFromAzimuth(azimuthDeg) {
+            const rad = azimuthDeg * Math.PI / 180;
+            return [Math.cos(rad), Math.sin(rad), 0];
         }
 
         function setupUI() {
@@ -420,6 +486,37 @@
             document.getElementById('btn-clear-viz').addEventListener('click', () => {
                 rayVisualizer.clearRays();
                 rayVisualizer.clearHeatmap();
+                stopWalking();
+                document.getElementById('btn-walk-mode').disabled = true;
+                document.getElementById('btn-stop-walk').disabled = true;
+            });
+
+            document.getElementById('btn-set-pattern').addEventListener('click', () => {
+                const pattern = document.getElementById('source-pattern').value;
+                const azimuth = parseFloat(document.getElementById('source-azimuth').value);
+                const forwardDir = getForwardDirFromAzimuth(azimuth);
+                sendWS({ type: 'set_source_pattern', pattern, forward_dir: forwardDir });
+            });
+
+            document.getElementById('btn-walk-mode').addEventListener('click', () => {
+                walkMode = !walkMode;
+                const btn = document.getElementById('btn-walk-mode');
+                if (walkMode) {
+                    btn.textContent = '退出射线选择';
+                    btn.classList.remove('btn-primary');
+                    btn.classList.add('btn-danger');
+                    document.getElementById('walk-status').textContent = '请点击场景中的射线路径...';
+                } else {
+                    btn.textContent = '选择射线漫游';
+                    btn.classList.remove('btn-danger');
+                    btn.classList.add('btn-primary');
+                    document.getElementById('walk-status').textContent = '';
+                    selectedRayIndex = -1;
+                }
+            });
+
+            document.getElementById('btn-stop-walk').addEventListener('click', () => {
+                stopWalking();
             });
 
             sceneManager.onSourceMoved = (pos) => {
@@ -440,6 +537,249 @@
                     });
                 }
             };
+
+            setupRayPicking();
+        }
+
+        function setupRayPicking() {
+            const dom = sceneManager.renderer.domElement;
+            dom.addEventListener('click', (e) => {
+                if (!walkMode || lastRays.length === 0) return;
+
+                const rect = dom.getBoundingClientRect();
+                const mouse = new THREE.Vector2(
+                    ((e.clientX - rect.left) / rect.width) * 2 - 1,
+                    -((e.clientY - rect.top) / rect.height) * 2 + 1
+                );
+
+                const raycaster = new THREE.Raycaster();
+                raycaster.setFromCamera(mouse, sceneManager.camera);
+
+                let nearestIdx = -1;
+                let nearestDist = Infinity;
+
+                for (let i = 0; i < lastRays.length; i++) {
+                    const ray = lastRays[i];
+                    const path = ray.path;
+                    if (path.length < 2) continue;
+
+                    for (let j = 0; j < path.length - 1; j++) {
+                        const p1 = new THREE.Vector3(path[j][0], path[j][2], path[j][1]);
+                        const p2 = new THREE.Vector3(path[j + 1][0], path[j + 1][2], path[j + 1][1]);
+
+                        const lineVec = new THREE.Vector3().subVectors(p2, p1);
+                        const rayVec = new THREE.Vector3().subVectors(raycaster.ray.origin, p1);
+                        const lineLen2 = lineVec.lengthSq();
+
+                        if (lineLen2 < 1e-6) continue;
+
+                        let t = rayVec.dot(lineVec) / lineLen2;
+                        t = Math.max(0, Math.min(1, t));
+
+                        const closest = new THREE.Vector3().copy(p1).addScaledVector(lineVec, t);
+                        const dist = raycaster.ray.distanceToPoint(closest);
+
+                        if (dist < 0.5 && dist < nearestDist) {
+                            nearestDist = dist;
+                            nearestIdx = i;
+                        }
+                    }
+                }
+
+                if (nearestIdx >= 0) {
+                    selectedRayIndex = nearestIdx;
+                    document.getElementById('walk-status').textContent =
+                        `选中射线 #${nearestIdx} (${lastRays[nearestIdx].path.length} 段, 距离: ${lastRays[nearestIdx].total_distance.toFixed(2)}m) - 开始漫游...`;
+                    startWalking(nearestIdx);
+                }
+            });
+        }
+
+        function startWalking(rayIdx) {
+            if (rayIdx < 0 || rayIdx >= lastRays.length) return;
+            const ray = lastRays[rayIdx];
+            walkPath = ray.path.map(p => new THREE.Vector3(p[0], p[2], p[1]));
+            walkProgress = 0;
+            isWalking = true;
+            walkDirection = 1;
+            lastWalkTime = 0;
+            sceneManager.controls.enabled = false;
+
+            document.getElementById('btn-stop-walk').disabled = false;
+            document.getElementById('btn-walk-mode').disabled = true;
+
+            initAudio();
+            if (audioCtx && audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            animateWalk();
+        }
+
+        function stopWalking() {
+            isWalking = false;
+            walkMode = false;
+            sceneManager.controls.enabled = true;
+            document.getElementById('btn-walk-mode').disabled = false;
+            document.getElementById('btn-walk-mode').textContent = '选择射线漫游';
+            document.getElementById('btn-walk-mode').classList.remove('btn-danger');
+            document.getElementById('btn-walk-mode').classList.add('btn-primary');
+            document.getElementById('btn-stop-walk').disabled = true;
+            document.getElementById('walk-status').textContent = '';
+
+            stopAudio();
+        }
+
+        let lastWalkTime = 0;
+        function animateWalk(timestamp) {
+            if (!isWalking) return;
+
+            if (!lastWalkTime) lastWalkTime = timestamp;
+            const dt = (timestamp - lastWalkTime) / 1000;
+            lastWalkTime = timestamp;
+
+            let totalLen = 0;
+            const segLens = [];
+            for (let i = 0; i < walkPath.length - 1; i++) {
+                const len = walkPath[i].distanceTo(walkPath[i + 1]);
+                segLens.push(len);
+                totalLen += len;
+            }
+
+            walkProgress += walkDirection * walkSpeed * dt / totalLen;
+
+            if (walkProgress >= 1) {
+                walkProgress = 1;
+                walkDirection = -1;
+            } else if (walkProgress <= 0) {
+                walkProgress = 0;
+                walkDirection = 1;
+            }
+
+            let dist = walkProgress * totalLen;
+            let segIdx = 0;
+            for (let i = 0; i < segLens.length; i++) {
+                if (dist <= segLens[i]) {
+                    segIdx = i;
+                    break;
+                }
+                dist -= segLens[i];
+            }
+
+            const t = segLens[segIdx] > 0 ? dist / segLens[segIdx] : 0;
+            const pos = new THREE.Vector3().lerpVectors(walkPath[segIdx], walkPath[segIdx + 1], t);
+
+            const lookDir = new THREE.Vector3().subVectors(
+                walkPath[Math.min(segIdx + 1, walkPath.length - 1)],
+                walkPath[Math.max(segIdx - 1, 0)]
+            ).normalize();
+
+            const offsetHeight = 1.6;
+            const cameraPos = new THREE.Vector3(pos.x, pos.y + offsetHeight, pos.z);
+            sceneManager.camera.position.copy(cameraPos);
+
+            const lookTarget = new THREE.Vector3().copy(cameraPos).add(lookDir);
+            lookTarget.y = cameraPos.y;
+            sceneManager.camera.lookAt(lookTarget);
+            sceneManager.controls.target.copy(lookTarget);
+
+            const energyIdx = Math.floor(walkProgress * (lastRays[selectedRayIndex].energies.length - 1));
+            const energy = lastRays[selectedRayIndex].energies[Math.min(energyIdx, lastRays[selectedRayIndex].energies.length - 1)];
+            updateAudio(energy);
+
+            requestAnimationFrame(animateWalk);
+        }
+
+        function initAudio() {
+            if (audioCtx) return;
+
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            audioCtx = new AudioContext();
+
+            const bufferSize = 2 * audioCtx.sampleRate;
+            const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+            const output = noiseBuffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) {
+                output[i] = Math.random() * 2 - 1;
+            }
+
+            noiseNode = audioCtx.createBufferSource();
+            noiseNode.buffer = noiseBuffer;
+            noiseNode.loop = true;
+
+            filterNode = audioCtx.createBiquadFilter();
+            filterNode.type = 'lowpass';
+            filterNode.frequency.value = 2000;
+
+            gainNode = audioCtx.createGain();
+            gainNode.gain.value = 0;
+
+            convolverNode = audioCtx.createConvolver();
+            generateImpulseResponse(0.5);
+
+            const wetGain = audioCtx.createGain();
+            wetGain.gain.value = 0.7;
+            const dryGain = audioCtx.createGain();
+            dryGain.gain.value = 0.3;
+
+            noiseNode.connect(filterNode);
+            filterNode.connect(gainNode);
+            gainNode.connect(dryGain);
+            gainNode.connect(convolverNode);
+            convolverNode.connect(wetGain);
+            dryGain.connect(audioCtx.destination);
+            wetGain.connect(audioCtx.destination);
+
+            noiseNode.start();
+
+            window._dryGain = dryGain;
+            window._wetGain = wetGain;
+        }
+
+        function generateImpulseResponse(rt60) {
+            if (!audioCtx || !convolverNode) return;
+
+            const sampleRate = audioCtx.sampleRate;
+            const duration = Math.max(0.1, rt60 * 2);
+            const length = Math.floor(sampleRate * duration);
+            const impulse = audioCtx.createBuffer(2, length, sampleRate);
+
+            for (let ch = 0; ch < 2; ch++) {
+                const data = impulse.getChannelData(ch);
+                const decay = Math.log(1000) / Math.max(0.01, rt60);
+                for (let i = 0; i < length; i++) {
+                    const t = i / sampleRate;
+                    const envelope = Math.exp(-decay * t);
+                    data[i] = (Math.random() * 2 - 1) * envelope;
+                }
+            }
+
+            convolverNode.buffer = impulse;
+        }
+
+        function updateAudio(energy) {
+            if (!audioCtx || !gainNode) return;
+
+            const volume = Math.min(0.5, Math.max(0.001, energy * 0.5));
+            gainNode.gain.setTargetAtTime(volume, audioCtx.currentTime, 0.1);
+
+            const baseRt60 = 0.3 + energy * 2.0;
+            generateImpulseResponse(baseRt60);
+
+            if (filterNode) {
+                const freq = 500 + energy * 3500;
+                filterNode.frequency.setTargetAtTime(freq, audioCtx.currentTime, 0.1);
+            }
+
+            if (window._wetGain) {
+                const wet = 0.2 + energy * 0.6;
+                window._wetGain.gain.setTargetAtTime(wet, audioCtx.currentTime, 0.1);
+            }
+        }
+
+        function stopAudio() {
+            if (gainNode) {
+                gainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.1);
+            }
         }
 
         async function init() {
