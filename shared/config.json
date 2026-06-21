@@ -1,0 +1,38 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "ws_port": 8765,
+    "http_port": 8080
+  },
+  "raytracer": {
+    "num_rays": 500,
+    "max_reflections": 10,
+    "speed_of_sound": 343.0,
+    "air_absorption": 0.001,
+    "energy_threshold": 0.001
+  },
+  "materials": {
+    "concrete": { "absorption": 0.02, "scattering": 0.05 },
+    "wood": { "absorption": 0.10, "scattering": 0.10 },
+    "glass": { "absorption": 0.03, "scattering": 0.02 },
+    "acoustic_panel": { "absorption": 0.85, "scattering": 0.30 },
+    "carpet": { "absorption": 0.30, "scattering": 0.20 },
+    "plaster": { "absorption": 0.05, "scattering": 0.08 }
+  },
+  "scene": {
+    "room_width": 10.0,
+    "room_depth": 8.0,
+    "room_height": 3.5,
+    "grid_resolution": 1.0,
+    "default_wall_material": "concrete",
+    "default_panel_material": "acoustic_panel"
+  },
+  "visualization": {
+    "ray_color_high": [1.0, 0.2, 0.0],
+    "ray_color_low": [0.0, 0.2, 1.0],
+    "heatmap_high": [1.0, 0.0, 0.0],
+    "heatmap_mid": [1.0, 1.0, 0.0],
+    "heatmap_low": [0.0, 0.0, 1.0],
+    "ray_opacity": 0.6
+  }
+}

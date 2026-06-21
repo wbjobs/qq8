@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>室内声学射线追踪模拟器</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; background: #0f0f23; color: #e0e0e0; overflow: hidden; }
+
+        #app { display: flex; height: 100vh; }
+
+        #viewport { flex: 1; position: relative; }
+        #viewport canvas { display: block; width: 100%; height: 100%; }
+
+        #sidebar {
+            width: 300px;
+            background: #1a1a2e;
+            border-left: 1px solid #2a2a4e;
+            padding: 16px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .panel {
+            background: #16213e;
+            border-radius: 8px;
+            padding: 14px;
+            border: 1px solid #2a2a5e;
+        }
+
+        .panel h3 {
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #7f8fa6;
+            margin-bottom: 10px;
+        }
+
+        .btn {
+            display: block;
+            width: 100%;
+            padding: 9px 12px;
+            margin-bottom: 6px;
+            border: none;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 500;
+        }
+
+        .btn-primary { background: #e94560; color: white; }
+        .btn-primary:hover { background: #c73652; }
+        .btn-primary:disabled { background: #664; cursor: not-allowed; opacity: 0.6; }
+
+        .btn-secondary { background: #0f3460; color: #e0e0e0; }
+        .btn-secondary:hover { background: #1a4a7a; }
+
+        .btn-accent { background: #1a8a5a; color: white; }
+        .btn-accent:hover { background: #15704a; }
+
+        .btn-danger { background: #5a1a1a; color: #e0e0e0; }
+        .btn-danger:hover { background: #7a2a2a; }
+
+        label {
+            display: block;
+            font-size: 12px;
+            color: #8899aa;
+            margin-bottom: 4px;
+            margin-top: 8px;
+        }
+
+        input, select {
+            width: 100%;
+            padding: 7px 10px;
+            background: #0f0f23;
+            border: 1px solid #2a2a5e;
+            border-radius: 5px;
+            color: #e0e0e0;
+            font-size: 13px;
+        }
+
+        input:focus, select:focus { outline: none; border-color: #e94560; }
+
+        .status-bar {
+            background: #0f0f23;
+            border-radius: 6px;
+            padding: 10px;
+            font-size: 12px;
+            line-height: 1.8;
+        }
+
+        .status-bar .label { color: #7f8fa6; }
+        .status-bar .value { color: #e94560; font-weight: 600; }
+
+        .legend {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 6px;
+            font-size: 11px;
+            color: #7f8fa6;
+        }
+
+        .legend-bar {
+            flex: 1;
+            height: 8px;
+            border-radius: 4px;
+        }
+
+        .legend-ray { background: linear-gradient(to right, #0033ff, #ff3300); }
+        .legend-heatmap { background: linear-gradient(to right, #0000ff, #ffff00, #ff0000); }
+
+        #connection-status {
+            padding: 6px 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            text-align: center;
+        }
+
+        .connected { background: #1a5a3a; color: #44dd88; }
+        .disconnected { background: #5a1a1a; color: #dd4444; }
+        .connecting { background: #5a4a1a; color: #ddaa44; }
+
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            padding: 3px 0;
+        }
+
+        .info-row .key { color: #7f8fa6; }
+        .info-row .val { color: #e0e0e0; font-weight: 500; }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div id="viewport"></div>
+        <div id="sidebar">
+            <div id="connection-status" class="disconnected">● 未连接</div>
+
+            <div class="panel">
+                <h3>🔧 场景编辑</h3>
+                <button class="btn btn-accent" id="btn-add-wall">添加墙壁</button>
+                <button class="btn btn-accent" id="btn-add-panel">添加吸音板</button>
+                <label>吸音板方向</label>
+                <select id="panel-orientation">
+                    <option value="x">X 轴方向</option>
+                    <option value="z">Z 轴方向</option>
+                </select>
+                <label>吸音板宽度</label>
+                <input type="number" id="panel-width" value="2" min="0.5" max="8" step="0.5">
+                <button class="btn btn-danger" id="btn-remove-last-panel">删除最后吸音板</button>
+                <button class="btn btn-secondary" id="btn-reset">重置场景</button>
+            </div>
+
+            <div class="panel">
+                <h3>🔊 声源位置</h3>
+                <label>X 坐标</label>
+                <input type="number" id="source-x" value="5" min="0.5" max="9.5" step="0.5">
+                <label>Y 坐标</label>
+                <input type="number" id="source-y" value="4" min="0.5" max="7.5" step="0.5">
+                <label>Z 坐标（高度）</label>
+                <input type="number" id="source-z" value="1.5" min="0.5" max="3" step="0.1">
+                <button class="btn btn-secondary" id="btn-update-source">更新声源</button>
+            </div>
+
+            <div class="panel">
+                <h3>🚀 模拟控制</h3>
+                <button class="btn btn-primary" id="btn-simulate">运行射线追踪模拟</button>
+                <button class="btn btn-secondary" id="btn-clear-viz">清除可视化</button>
+                <label>射线数量</label>
+                <input type="number" id="num-rays" value="500" min="50" max="2000" step="50">
+            </div>
+
+            <div class="panel">
+                <h3>📊 模拟结果</h3>
+                <div class="status-bar" id="results">
+                    <div class="info-row"><span class="key">平均 RT60:</span><span class="val" id="avg-rt60">—</span></div>
+                    <div class="info-row"><span class="key">房间体积:</span><span class="val" id="room-volume">—</span></div>
+                    <div class="info-row"><span class="key">总吸声量:</span><span class="val" id="total-absorption">—</span></div>
+                    <div class="info-row"><span class="key">射线数:</span><span class="val" id="ray-count">—</span></div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h3>🎨 图例</h3>
+                <div class="legend">
+                    <span>低能量</span>
+                    <div class="legend-bar legend-ray"></div>
+                    <span>高能量</span>
+                </div>
+                <div class="legend">
+                    <span>短RT60</span>
+                    <div class="legend-bar legend-heatmap"></div>
+                    <span>长RT60</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import { SceneManager } from './scene.js';
+        import { RayVisualizer } from './ray_visualizer.js';
+
+        const WS_URL = 'ws://localhost:8765';
+        let ws = null;
+        let sceneManager = null;
+        let rayVisualizer = null;
+        let config = null;
+
+        async function loadConfig() {
+            try {
+                const resp = await fetch('/shared/config.json');
+                config = await resp.json();
+            } catch {
+                config = {
+                    scene: { room_width: 10, room_depth: 8, room_height: 3.5, grid_resolution: 1.0 },
+                    visualization: {
+                        ray_color_high: [1.0, 0.2, 0.0],
+                        ray_color_low: [0.0, 0.2, 1.0],
+                        heatmap_high: [1.0, 0.0, 0.0],
+                        heatmap_mid: [1.0, 1.0, 0.0],
+                        heatmap_low: [0.0, 0.0, 1.0],
+                        ray_opacity: 0.6
+                    }
+                };
+            }
+        }
+
+        function connectWS() {
+            updateConnectionStatus('connecting');
+            ws = new WebSocket(WS_URL);
+
+            ws.onopen = () => {
+                updateConnectionStatus('connected');
+                ws.send(JSON.stringify({ type: 'get_scene' }));
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                handleMessage(data);
+            };
+
+            ws.onclose = () => {
+                updateConnectionStatus('disconnected');
+                setTimeout(connectWS, 3000);
+            };
+
+            ws.onerror = () => {
+                updateConnectionStatus('disconnected');
+            };
+        }
+
+        function updateConnectionStatus(status) {
+            const el = document.getElementById('connection-status');
+            if (status === 'connected') {
+                el.className = 'connected';
+                el.textContent = '● 已连接';
+            } else if (status === 'connecting') {
+                el.className = 'connecting';
+                el.textContent = '● 连接中...';
+            } else {
+                el.className = 'disconnected';
+                el.textContent = '● 未连接';
+            }
+        }
+
+        function handleMessage(data) {
+            switch (data.type) {
+                case 'scene_data':
+                    sceneManager.sourcePosition = data.source;
+                    updateSourceInputs(data.source);
+                    break;
+
+                case 'wall_added':
+                    const w = data.wall;
+                    sceneManager.addWall(w.start, w.end, w.height, w.material);
+                    break;
+
+                case 'panel_added':
+                    const p = data.panel;
+                    sceneManager.addPanel(
+                        [(p.start[0] + p.end[0]) / 2, (p.start[1] + p.end[1]) / 2],
+                        Math.sqrt((p.end[0]-p.start[0])**2 + (p.end[1]-p.start[1])**2),
+                        p.height,
+                        Math.abs(p.end[0] - p.start[0]) > Math.abs(p.end[1] - p.start[1]) ? 'x' : 'z',
+                        p.material
+                    );
+                    break;
+
+                case 'panel_removed':
+                    sceneManager.removePanel(data.index);
+                    break;
+
+                case 'scene_reset':
+                    if (config) {
+                        sceneManager.clearVisualization();
+                        rayVisualizer.clearRays();
+                        rayVisualizer.clearHeatmap();
+                        sceneManager.buildRoom(config);
+                    }
+                    break;
+
+                case 'simulation_result':
+                    rayVisualizer.visualizeRays(data.rays);
+                    rayVisualizer.visualizeHeatmap(data.heatmap, config.scene.grid_resolution);
+                    rayVisualizer.addRayLegend();
+                    document.getElementById('avg-rt60').textContent = data.average_rt60.toFixed(3) + ' s';
+                    document.getElementById('room-volume').textContent = data.room_volume.toFixed(1) + ' m³';
+                    document.getElementById('total-absorption').textContent = data.total_absorption.toFixed(3) + ' sabins';
+                    document.getElementById('ray-count').textContent = data.rays.length;
+                    document.getElementById('btn-simulate').disabled = false;
+                    document.getElementById('btn-simulate').textContent = '运行射线追踪模拟';
+                    break;
+
+                case 'source_set':
+                    sceneManager.sourcePosition = data.position;
+                    sceneManager._createSource();
+                    break;
+
+                case 'error':
+                    console.error('Server error:', data.message);
+                    document.getElementById('btn-simulate').disabled = false;
+                    document.getElementById('btn-simulate').textContent = '运行射线追踪模拟';
+                    break;
+            }
+        }
+
+        function sendWS(data) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(data));
+            }
+        }
+
+        function updateSourceInputs(pos) {
+            document.getElementById('source-x').value = pos[0];
+            document.getElementById('source-y').value = pos[1];
+            document.getElementById('source-z').value = pos[2];
+        }
+
+        function setupUI() {
+            document.getElementById('btn-add-wall').addEventListener('click', () => {
+                const sc = config.scene;
+                const x = Math.random() * (sc.room_width - 2) + 1;
+                const y = Math.random() * (sc.room_depth - 2) + 1;
+                const horiz = Math.random() > 0.5;
+                const len = 2 + Math.random() * 2;
+                const start = horiz ? [x, y] : [x, y];
+                const end = horiz ? [x + len, y] : [x, y + len];
+                sendWS({
+                    type: 'add_wall',
+                    start, end,
+                    height: sc.room_height,
+                    material: 'concrete'
+                });
+            });
+
+            document.getElementById('btn-add-panel').addEventListener('click', () => {
+                const sc = config.scene;
+                const x = 1 + Math.random() * (sc.room_width - 2);
+                const y = 1 + Math.random() * (sc.room_depth - 2);
+                const orientation = document.getElementById('panel-orientation').value;
+                const width = parseFloat(document.getElementById('panel-width').value);
+                sendWS({
+                    type: 'add_panel',
+                    position: [x, y],
+                    width,
+                    height: 2.0,
+                    orientation,
+                    material: 'acoustic_panel'
+                });
+            });
+
+            document.getElementById('btn-remove-last-panel').addEventListener('click', () => {
+                const count = sceneManager.panels.length;
+                if (count > 0) {
+                    sendWS({ type: 'remove_panel', index: count - 1 });
+                }
+            });
+
+            document.getElementById('btn-reset').addEventListener('click', () => {
+                sendWS({ type: 'reset_scene' });
+            });
+
+            document.getElementById('btn-update-source').addEventListener('click', () => {
+                const pos = [
+                    parseFloat(document.getElementById('source-x').value),
+                    parseFloat(document.getElementById('source-y').value),
+                    parseFloat(document.getElementById('source-z').value)
+                ];
+                sendWS({ type: 'set_source', position: pos });
+            });
+
+            document.getElementById('btn-simulate').addEventListener('click', () => {
+                const btn = document.getElementById('btn-simulate');
+                btn.disabled = true;
+                btn.textContent = '模拟中...';
+                sendWS({ type: 'run_simulation' });
+            });
+
+            document.getElementById('btn-clear-viz').addEventListener('click', () => {
+                rayVisualizer.clearRays();
+                rayVisualizer.clearHeatmap();
+            });
+
+            sceneManager.onSourceMoved = (pos) => {
+                updateSourceInputs(pos);
+                sendWS({ type: 'set_source', position: pos });
+            };
+
+            sceneManager.onPanelMoved = (idx, pos) => {
+                const panel = sceneManager.panels[idx];
+                if (panel) {
+                    sendWS({
+                        type: 'add_panel',
+                        position: pos,
+                        width: panel.width,
+                        height: panel.height,
+                        orientation: panel.orientation,
+                        material: panel.material
+                    });
+                }
+            };
+        }
+
+        async function init() {
+            await loadConfig();
+
+            const container = document.getElementById('viewport');
+            sceneManager = new SceneManager(container);
+            sceneManager.buildRoom(config);
+            rayVisualizer = new RayVisualizer(sceneManager.scene, config);
+
+            setupUI();
+            sceneManager.animate();
+            connectWS();
+        }
+
+        init();
+    </script>
+</body>
+</html>
