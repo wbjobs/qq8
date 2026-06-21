@@ -119,7 +119,9 @@ class AcousticWebSocketServer:
 
     def _run_simulation(self):
         import numpy as np
-        rays = self.raytracer.trace_all(self.source_position, self.room)
+        import time
+        start_time = time.time()
+        rays, adaptive_count = self.raytracer.trace_all(self.source_position, self.room)
 
         ray_data = []
         for r in rays:
@@ -147,13 +149,19 @@ class AcousticWebSocketServer:
         total_abs = self.calculator.calculate_total_absorption(surfaces_info)
         avg_rt60 = self.calculator.calculate_rt60_sabine(room_volume, total_abs)
 
+        num_surfaces = len(self.room.walls) + len(self.room.panels)
+        sim_time = round(time.time() - start_time, 3)
+
         return {
             'type': 'simulation_result',
             'rays': ray_data,
             'heatmap': heatmap,
             'average_rt60': round(avg_rt60, 3),
             'room_volume': round(room_volume, 2),
-            'total_absorption': round(total_abs, 3)
+            'total_absorption': round(total_abs, 3),
+            'adaptive_ray_count': adaptive_count,
+            'num_surfaces': num_surfaces,
+            'simulation_time': sim_time
         }
 
     async def _ws_handler(self, websocket):

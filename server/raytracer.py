@@ -209,12 +209,23 @@ class RayTracer:
             'total_distance': total_distance
         }
 
-    def generate_ray_directions(self):
+    def _get_adaptive_ray_count(self, num_surfaces):
+        base_rays = self.rt_config['num_rays']
+        if num_surfaces <= 10:
+            return base_rays
+        elif num_surfaces <= 20:
+            return max(200, int(base_rays * 0.7))
+        else:
+            return max(200, int(base_rays * 0.4))
+
+    def generate_ray_directions(self, count=None):
+        if count is None:
+            count = self.num_rays
         directions = []
         golden_ratio = (1 + np.sqrt(5)) / 2
-        for i in range(self.num_rays):
+        for i in range(count):
             theta = 2 * np.pi * i / golden_ratio
-            phi = np.arccos(1 - 2 * (i + 0.5) / self.num_rays)
+            phi = np.arccos(1 - 2 * (i + 0.5) / count)
             x = np.sin(phi) * np.cos(theta)
             y = np.sin(phi) * np.sin(theta)
             z = np.cos(phi)
@@ -223,12 +234,13 @@ class RayTracer:
 
     def trace_all(self, source_position, room):
         surfaces = room.get_all_surfaces()
-        directions = self.generate_ray_directions()
+        adaptive_count = self._get_adaptive_ray_count(len(surfaces))
+        directions = self.generate_ray_directions(adaptive_count)
         rays = []
         for d in directions:
             result = self.trace_ray(source_position, d, surfaces)
             rays.append(result)
-        return rays
+        return rays, adaptive_count
 
     def calculate_rt60_at_points(self, source_position, room, grid_resolution=None):
         if grid_resolution is None:
@@ -257,7 +269,7 @@ class RayTracer:
         base_rt60 = self.calculator.calculate_rt60_sabine(room_volume, total_absorption)
 
         rt60_map = {}
-        rays = self.trace_all(source_position, room)
+        rays, _ = self.trace_all(source_position, room)
 
         x_points = np.arange(grid_resolution / 2, w, grid_resolution)
         y_points = np.arange(grid_resolution / 2, d, grid_resolution)

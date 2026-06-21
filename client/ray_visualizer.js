@@ -4,9 +4,52 @@ export class RayVisualizer {
     constructor(scene, config) {
         this.scene = scene;
         this.config = config;
-        this.rayGroup = null;
-        this.heatmapGroup = null;
         this.vizConfig = config.visualization;
+
+        this.rayGroup = null;
+        this.raySegments = null;
+        this.rayGeometry = null;
+        this.rayMaterial = null;
+        this.positionAttr = null;
+        this.colorAttr = null;
+
+        this.heatmapGroup = null;
+
+        this.MAX_SEGMENTS = 10000;
+        this._createRayGeometry();
+    }
+
+    _createRayGeometry() {
+        const maxVerts = this.MAX_SEGMENTS * 2;
+
+        this.rayGeometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(maxVerts * 3);
+        const colors = new Float32Array(maxVerts * 3);
+
+        this.positionAttr = new THREE.BufferAttribute(positions, 3);
+        this.colorAttr = new THREE.BufferAttribute(colors, 3);
+        this.positionAttr.setUsage(THREE.DynamicDrawUsage);
+        this.colorAttr.setUsage(THREE.DynamicDrawUsage);
+
+        this.rayGeometry.setAttribute('position', this.positionAttr);
+        this.rayGeometry.setAttribute('color', this.colorAttr);
+        this.rayGeometry.setDrawRange(0, 0);
+
+        this.rayMaterial = new THREE.LineBasicMaterial({
+            vertexColors: true,
+            transparent: true,
+            opacity: this.vizConfig.ray_opacity,
+            linewidth: 1
+        });
+
+        this.raySegments = new THREE.LineSegments(this.rayGeometry, this.rayMaterial);
+        this.raySegments.userData.visualization = true;
+        this.raySegments.frustumCulled = false;
+
+        this.rayGroup = new THREE.Group();
+        this.rayGroup.userData.visualization = true;
+        this.rayGroup.add(this.raySegments);
+        this.scene.add(this.rayGroup);
     }
 
     _energyToColor(energy) {
@@ -16,7 +59,7 @@ export class RayVisualizer {
         const r = low[0] + (high[0] - low[0]) * t;
         const g = low[1] + (high[1] - low[1]) * t;
         const b = low[2] + (high[2] - low[2]) * t;
-        return new THREE.Color(r, g, b);
+        return { r, g, b };
     }
 
     _heatmapColor(normalized) {
@@ -41,13 +84,10 @@ export class RayVisualizer {
     }
 
     clearRays() {
-        if (this.rayGroup) {
-            this.scene.remove(this.rayGroup);
-            this.rayGroup.traverse(child => {
-                if (child.geometry) child.geometry.dispose();
-                if (child.material) child.material.dispose();
-            });
-            this.rayGroup = null;
+        if (this.rayGeometry) {
+            this.rayGeometry.setDrawRange(0, 0);
+            this.positionAttr.needsUpdate = true;
+            this.colorAttr.needsUpdate = true;
         }
     }
 
@@ -63,12 +103,17 @@ export class RayVisualizer {
     }
 
     visualizeRays(rays) {
-        this.clearRays();
-        this.rayGroup = new THREE.Group();
-        this.rayGroup.userData.visualization = true;
+        if (!this.rayGeometry) {
+            this._createRayGeometry();
+        }
 
-        const maxRays = Math.min(rays.length, 200);
+        const maxRays = Math.min(rays.length, 400);
         const step = Math.max(1, Math.floor(rays.length / maxRays));
+
+        const positions = this.positionAttr.array;
+        const colors = this.colorAttr.array;
+        let vertexIdx = 0;
+        let segmentCount = 0;
 
         for (let i = 0; i < rays.length; i += step) {
             const ray = rays[i];
@@ -77,38 +122,39 @@ export class RayVisualizer {
 
             if (path.length < 2) continue;
 
-            const positions = [];
-            const colors = [];
-
             for (let j = 0; j < path.length - 1; j++) {
+                if (segmentCount >= this.MAX_SEGMENTS) break;
+
                 const p1 = path[j];
                 const p2 = path[j + 1];
 
-                positions.push(p1[0], p1[2], p1[1]);
-                positions.push(p2[0], p2[2], p2[1]);
+                const posIdx = vertexIdx * 3;
+                positions[posIdx] = p1[0];
+                positions[posIdx + 1] = p1[2];
+                positions[posIdx + 2] = p1[1];
+                positions[posIdx + 3] = p2[0];
+                positions[posIdx + 4] = p2[2];
+                positions[posIdx + 5] = p2[1];
 
                 const energy = energies[Math.min(j, energies.length - 1)];
                 const color = this._energyToColor(energy);
-                colors.push(color.r, color.g, color.b);
-                colors.push(color.r, color.g, color.b);
+                colors[posIdx] = color.r;
+                colors[posIdx + 1] = color.g;
+                colors[posIdx + 2] = color.b;
+                colors[posIdx + 3] = color.r;
+                colors[posIdx + 4] = color.g;
+                colors[posIdx + 5] = color.b;
+
+                vertexIdx += 2;
+                segmentCount++;
             }
-
-            const geometry = new THREE.BufferGeometry();
-            geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-            geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-
-            const material = new THREE.LineBasicMaterial({
-                vertexColors: true,
-                transparent: true,
-                opacity: this.vizConfig.ray_opacity,
-                linewidth: 1
-            });
-
-            const lineSegments = new THREE.LineSegments(geometry, material);
-            this.rayGroup.add(lineSegments);
         }
 
-        this.scene.add(this.rayGroup);
+        this.rayGeometry.setDrawRange(0, segmentCount * 2);
+        this.positionAttr.needsUpdate = true;
+        this.colorAttr.needsUpdate = true;
+        this.positionAttr.updateRange.count = segmentCount * 2 * 3;
+        this.colorAttr.updateRange.count = segmentCount * 2 * 3;
     }
 
     visualizeHeatmap(heatmap, gridResolution = 1.0) {
@@ -190,5 +236,25 @@ export class RayVisualizer {
                 child.material.dispose();
             }
         });
+    }
+
+    dispose() {
+        this.clearRays();
+        this.clearHeatmap();
+        this._removeLegend();
+        if (this.rayGroup) {
+            this.scene.remove(this.rayGroup);
+            this.rayGroup = null;
+        }
+        if (this.rayGeometry) {
+            this.rayGeometry.dispose();
+            this.rayGeometry = null;
+        }
+        if (this.rayMaterial) {
+            this.rayMaterial.dispose();
+            this.rayMaterial = null;
+        }
+        this.positionAttr = null;
+        this.colorAttr = null;
     }
 }

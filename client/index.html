@@ -183,6 +183,9 @@
                     <div class="info-row"><span class="key">房间体积:</span><span class="val" id="room-volume">—</span></div>
                     <div class="info-row"><span class="key">总吸声量:</span><span class="val" id="total-absorption">—</span></div>
                     <div class="info-row"><span class="key">射线数:</span><span class="val" id="ray-count">—</span></div>
+                    <div class="info-row"><span class="key">自适应射线:</span><span class="val" id="adaptive-ray-count">—</span></div>
+                    <div class="info-row"><span class="key">表面数:</span><span class="val" id="surface-count">—</span></div>
+                    <div class="info-row"><span class="key">模拟耗时:</span><span class="val" id="sim-time">—</span></div>
                 </div>
             </div>
 
@@ -322,6 +325,9 @@
                     document.getElementById('room-volume').textContent = data.room_volume.toFixed(1) + ' m³';
                     document.getElementById('total-absorption').textContent = data.total_absorption.toFixed(3) + ' sabins';
                     document.getElementById('ray-count').textContent = data.rays.length;
+                    document.getElementById('adaptive-ray-count').textContent = data.adaptive_ray_count || data.rays.length;
+                    document.getElementById('surface-count').textContent = data.num_surfaces || '—';
+                    document.getElementById('sim-time').textContent = (data.simulation_time || 0).toFixed(2) + ' s';
                     document.getElementById('btn-simulate').disabled = false;
                     document.getElementById('btn-simulate').textContent = '运行射线追踪模拟';
                     break;
